@@ -34,6 +34,7 @@ func StartApplication() {
 	models.ConnectToDatabases("MANAGER", "DASHBOARD")
 	cache.ConnectToRedis()
 	initial.InitCronJobs()
+	initial.InitKnowledgeRefreshCron()
 
 	global.LMSession = models.InitLmSession()
 	global.LMTokenizer = models.InitTokenizer()

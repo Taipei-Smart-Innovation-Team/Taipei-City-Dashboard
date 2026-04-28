@@ -41,6 +41,7 @@ func ConfigureRoutes() {
 	configureContributorRoutes()
 	configureChatLogRoutes()
 	configureAIRoutes()
+	configureQdrantRoutes()
 }
 
 func configureAuthRoutes() {
@@ -194,6 +195,15 @@ func configureContributorRoutes() {
 		contributorRoutes.POST("/", controllers.CreateContributor)
 		contributorRoutes.PATCH("/:id", controllers.UpdateContributor)
 		contributorRoutes.DELETE("/:id", controllers.DeleteContributor)
+	}
+}
+
+func configureQdrantRoutes() {
+	qdrantRoutes := RouterGroup.Group("/qdrant")
+	qdrantRoutes.Use(middleware.IsSysAdm()) // admin only
+	{
+		qdrantRoutes.POST("/rebuild", controllers.TriggerQdrantRebuild)             // 現有，補掛路由
+		qdrantRoutes.POST("/rebuild/city", controllers.TriggerCityKnowledgeRebuild) // 新增
 	}
 }
 

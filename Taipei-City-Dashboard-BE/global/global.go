@@ -36,9 +36,10 @@ type RedisConfig struct {
 }
 
 type QdrantConfig struct {
-	Url          string
-	Collection   string
-	ApiKey       string
+	Url            string
+	Collection     string // query_charts：儀表板元件搜尋
+	CityCollection string // city_knowledge：多主題城市知識庫
+	ApiKey         string
 }
 
 type LMConfig struct {
@@ -104,9 +105,10 @@ var (
 	}
 
 	Qdrant = QdrantConfig{
-		Url:        getEnv("QDRANT_URL","http://127.0.0.1:6333"),
-		Collection: getEnv("QDRANT_COLLECTION",""),
-		ApiKey:     getEnv("QDRANT_API_KEY",""),
+		Url:            getEnv("QDRANT_URL", "http://127.0.0.1:6333"),
+		Collection:     getEnv("QDRANT_COLLECTION", ""),
+		CityCollection: getEnv("QDRANT_CITY_COLLECTION", "city_knowledge"),
+		ApiKey:         getEnv("QDRANT_API_KEY", ""),
 	}
 
 	LM = LMConfig{
