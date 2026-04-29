@@ -1,4 +1,4 @@
-# 韌性防災 API 規格書 (v1.3)
+# 韌性防災 API 規格書 (v1.4)
 
 ## 1. Incident
 
@@ -76,10 +76,6 @@ Query Parameter: city: 過濾縣市 (TP/NTP)
 
 > 對應Go結構：`TimeSeriesDataOutput`
 
-####(2)時間序列
-
-> 對應 Go 結構：`TimeSeriesDataOutput`
-
 ```json
 {
   "data": [
@@ -97,10 +93,6 @@ Query Parameter: city: 過濾縣市 (TP/NTP)
 #### (3)三維資料
 
 > 對應Go結構：`ThreeDimensionalDataOutput`
-
-####(3)三維資料
-
-> 對應 Go 結構：`ThreeDimensionalDataOutput`
 
 ```json
 {
@@ -123,10 +115,6 @@ Query Parameter: city: 過濾縣市 (TP/NTP)
 
 > 對應Go結構：`MapLegendData`
 
-####(4)地圖圖例資料
-
-> 對應 Go 結構：`MapLegendData`
-
 ```json
 {
   "name": "一級警戒區",
@@ -142,31 +130,32 @@ Query Parameter: city: 過濾縣市 (TP/NTP)
 
 【輸出 (Output)】:
 
-````json
+```json
 {
   "status": "success",
-  "data":
-    {
-      "city": "TP",
-      "hospital_name": "台大醫院",
-      "is_full_119": true,
-      "metrics": {
-        "waiting_consultation": 45,
-        "waiting_stretcher": 12,
-        "waiting_admission": 20,
-        "waiting_icu": 3
-      }
+  "data": {
+    "city": "TP",
+    "hospital_name": "台大醫院",
+    "is_full_119": true,
+    "metrics": {
+      "waiting_consultation": 45,
+      "waiting_stretcher": 12,
+      "waiting_admission": 20,
+      "waiting_icu": 3
     }
+  }
 }
+```
 
 ## 3.qdrant
 
 ### [POST]/api/v1/qdrant/rebuild
 
 【輸入 (Input)】:
+
 ```json
 { "force": true }
-````
+```
 
 【輸出 (Output)】:
 
