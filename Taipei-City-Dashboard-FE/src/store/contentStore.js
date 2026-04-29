@@ -158,6 +158,18 @@ export const useContentStore = defineStore("content", {
 				}
 			});
 
+			// 測試：手動注入「韌性防災」儀表板類別 (僅限開發預覽)
+			const metrotaipeiDashboards = this.dashboards.get("metrotaipei") || [];
+			if (!metrotaipeiDashboards.some((d) => d.index === "resilience")) {
+				metrotaipeiDashboards.unshift({
+					index: "resilience",
+					name: "韌性防災",
+					icon: "security",
+					city: "metrotaipei",
+				});
+				this.dashboards.set("metrotaipei", metrotaipeiDashboards);
+			}
+
 			if (onlyDashboard) return;
 
 			// 2-1. If the current path is /dashboard or /mapview, redirect to the first dashboard
@@ -248,9 +260,15 @@ export const useContentStore = defineStore("content", {
 				return;
 			}
 
-			// Set the current dashboard info
 			this.currentDashboard.name = currentDashboardInfo.name;
 			this.currentDashboard.icon = currentDashboardInfo.icon;
+
+			// 如果是虛擬的韌性防災標籤，直接進入 Filter 流程，不請求後端 API 以免 404
+			if (this.currentDashboard.index === "resilience") {
+				this.cityDashboard.components = [];
+				this.filterCurrentDashboardContent();
+				return;
+			}
 
 			// Get the dashboard index data
 			try {
@@ -618,6 +636,91 @@ export const useContentStore = defineStore("content", {
 
 		// 5. filter the info for the current dashboard based on the index and city and adds it to "currentDashboard"
 		async filterCurrentDashboardContent() {
+			// 測試：將新組件掛載至「韌性防災」儀表板 (僅限開發預覽)
+			if (this.currentDashboard.index === "resilience") {
+				const mockNhiComponent = {
+					id: 999,
+					index: "test-nhi-chart",
+					name: "重度急救責任醫院 - 等待推床數",
+					source: "健保署即時資料 (API 串接)",
+					city: "metrotaipei",
+					time_from: "current",
+					time_to: "now",
+					chart_config: {
+						color: ["#FF5252"],
+						types: ["NhiEmergencyChart"],
+						unit: "人",
+						categories: [],
+					},
+					chart_data: [],
+				};
+				const mockNhiComponentTaipei = {
+					...mockNhiComponent,
+					city: "taipei",
+				};
+
+				const mockNhiDonutComponent = {
+					id: 1000,
+					index: "test-nhi-donut",
+					name: "重度急救責任醫院 - 醫療量能占比",
+					source: "健保署即時資料 (API 串接)",
+					city: "metrotaipei",
+					time_from: "current",
+					time_to: "now",
+					chart_config: {
+						color: ["#3498db"],
+						types: ["NhiEmergencyDonutChart"],
+						unit: "人",
+						categories: [],
+					},
+					chart_data: [],
+				};
+				const mockNhiDonutComponentTaipei = {
+					...mockNhiDonutComponent,
+					city: "taipei",
+				};
+
+				const mockLongTermCareComponent = {
+					id: 1001,
+					index: "test-longtermcare-text",
+					name: "長照關懷 - 測試文字",
+					source: "本地端 API 串接測試",
+					city: "metrotaipei",
+					time_from: "current",
+					time_to: "now",
+					chart_config: {
+						color: ["#9E9E9E"],
+						types: ["LongTermCareText"],
+						unit: null,
+						categories: [],
+					},
+					chart_data: [],
+				};
+				const mockLongTermCareComponentTaipei = {
+					...mockLongTermCareComponent,
+					city: "taipei",
+				};
+
+				this.currentDashboard.components = [mockNhiComponent, mockNhiDonutComponent, mockLongTermCareComponent];
+				this.currentDashboardExcluded.components = [
+					mockNhiComponentTaipei,
+					mockNhiDonutComponentTaipei,
+					mockLongTermCareComponentTaipei,
+				];
+				this.cityDashboard.components = [
+					mockNhiComponent, 
+					mockNhiComponentTaipei, 
+					mockNhiDonutComponent, 
+					mockNhiDonutComponentTaipei,
+					mockLongTermCareComponent,
+					mockLongTermCareComponentTaipei,
+				];
+				this.currentDashboard.name = "韌性防災";
+				this.currentDashboard.icon = "security";
+				this.loading = false;
+				return;
+			}
+
 			const { components } = this.cityDashboard;
 
 			if (components && components.length > 0) {

@@ -2,6 +2,8 @@ import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
 import viteCompression from "vite-plugin-compression";
 
+const repoRoot = new URL("..", import.meta.url).pathname;
+
 // 嘗試讀取環境變數，若不存在則回傳 false
 let isDockerCompose = process?.env.DOCKER_COMPOSE === "true"; // eslint-disable-line no-undef
 
@@ -10,7 +12,15 @@ const serverConfig = isDockerCompose
 		// Docker Compose override config
 		host: "0.0.0.0",
 		port: 80, // 如有需要可變更 port
+		fs: {
+			allow: [repoRoot],
+		},
 		proxy: {
+			"/nhi-api": {
+				target: "https://info.nhi.gov.tw/api",
+				changeOrigin: true,
+				rewrite: (path) => path.replace(/^\/nhi-api/, "")
+			},
 			"/api/dev": {
 				target: "http://dashboard-be:8080",
 				changeOrigin: true,
@@ -21,7 +31,15 @@ const serverConfig = isDockerCompose
 	: {
 		host: "0.0.0.0",
 		port: 80,
+		fs: {
+			allow: [repoRoot],
+		},
 		proxy: {
+			"/nhi-api": {
+				target: "https://info.nhi.gov.tw/api",
+				changeOrigin: true,
+				rewrite: (path) => path.replace(/^\/nhi-api/, "")
+			},
 			"/api": {
 				target: "https://citydashboard.taipei/api/v1",
 				changeOrigin: true,

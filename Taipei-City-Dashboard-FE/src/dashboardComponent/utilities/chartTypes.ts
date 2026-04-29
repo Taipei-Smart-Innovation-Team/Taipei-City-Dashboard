@@ -23,4 +23,7 @@ export const chartTypes: chartType = {
 	IndicatorChart: "指標圖", // V
 	MapLegend: "地圖圖例", // V
 	TextUnitChart: "文字數值圖", // V
+	NhiEmergencyChart: "急診量能圖", // test
+	NhiEmergencyDonutChart: "急診圓餅圖",
+	LongTermCareText: "長照關懷(文字)",
 };

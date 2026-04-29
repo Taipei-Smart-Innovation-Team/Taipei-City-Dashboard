@@ -11,6 +11,7 @@
 // Import the Essentials
 import { createApp } from "vue";
 import "./assets/styles/globalStyles.css";
+import "./assets/styles/riskPalette.css";
 import "./assets/styles/chartStyles.css";
 import "./assets/styles/toggleswitch.css";
 import App from "./App.vue";
