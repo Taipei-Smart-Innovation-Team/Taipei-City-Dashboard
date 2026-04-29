@@ -96,20 +96,42 @@ Query Parameter: city: 過濾縣市 (TP/NTP)
 {
   "status": "success",
   "data": {
-    "city": "TP",
-    "hospital_name": "台大醫院",
-    "is_full_119": true,
-    "metrics": {
-      "waiting_consultation": 45,
-      "waiting_stretcher": 12,
-      "waiting_admission": 20,
-      "waiting_icu": 3
-    }
+    "labels": ["宗教多樣性", "文化融合度", "空間友善度"],
+    "datasets": [
+      {
+        "name": "萬華區",
+        "values": [90, 85, 70]
+      }
+    ]
   }
 }
 ```
 
-## 3.qdrant
+## 3.query
+
+### [POST]/api/v1/query
+
+【輸入 (Input)】:
+
+```json
+{
+  "query": "為什麼祭典要燒金紙？",
+  "location": "萬華龍山寺"
+}
+```
+
+【輸出 (Output)】:
+
+```json
+{
+  "status": "success",
+  "aiSummary": "燒金紙在傳統信仰中象徵傳遞心意與財富給神靈或祖先。在共融視角下，龍山寺現推行『心誠則靈』減香減爐，展現環境友善與文化保存的平衡。",
+  "aiHarmony": "High",
+  "related_festival": "盂蘭盆勝會"
+}
+```
+
+## 4.qdrant
 
 ### [POST]/api/v1/qdrant/rebuild
 
@@ -154,35 +176,3 @@ Query Parameter: city: 過濾縣市 (TP/NTP)
 - **Endpoint**:`ws://[host]/api/v1/websocket`
 - **Protocol**:WebSocket(RFC 6455)
 - **Authentication**:需在連線時的Header帶入`Authorization:Bearer{JWT_TOKEN}`
-
-#### (1)伺服器主動推播訊息
-
-```json
-{
-  "event": "INCIDENT_NEW",
-  "timestamp": "2026-04-18T16:45:00Z",
-  "payload": {
-    "ID": 105,
-    "inctype": "GAS_LEAK",
-    "place": "新北市板橋區中正路",
-    "latitude": 25.0135,
-    "longitude": 121.4582,
-    "aiRisk": "High",
-    "aiSummary": "瓦斯濃度異常，疑似管線受損，建議立即派員切斷該區供氣。",
-    "description": "民眾通報路面有異味，消防隊已出動。"
-  }
-}
-```
-
-#### (2)系統心跳
-
-```json
-{
-  "event": "HEARTBEAT",
-  "timestamp": "2026-04-18T16:50:00Z",
-  "payload": {
-    "status": "connected",
-    "online_users": 5
-  }
-}
-```
