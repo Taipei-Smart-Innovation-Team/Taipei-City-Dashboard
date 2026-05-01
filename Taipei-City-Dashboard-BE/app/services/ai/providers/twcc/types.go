@@ -9,11 +9,11 @@ type TWCCMessage struct {
 }
 
 type TWCCParameters struct {
-	MaxNewTokens     *int      `json:"max_new_tokens,omitempty"`
-	Temperature      *float64  `json:"temperature,omitempty"`
+	MaxNewTokens     *int     `json:"max_new_tokens,omitempty"`
+	Temperature      *float64 `json:"temperature,omitempty"`
 	TopK             *int     `json:"top_k,omitempty"`
-	TopP             *float64  `json:"top_p,omitempty"`
-	FrequencePenalty *float64  `json:"frequence_penalty,omitempty"`
+	TopP             *float64 `json:"top_p,omitempty"`
+	FrequencePenalty *float64 `json:"frequence_penalty,omitempty"`
 	StopSequences    []string `json:"stop_sequences,omitempty"`
 	Seed             *int     `json:"seed,omitempty"`
 	Stream           bool     `json:"stream,omitempty"`

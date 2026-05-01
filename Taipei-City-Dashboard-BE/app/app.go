@@ -38,6 +38,8 @@ func StartApplication() {
 	global.LMSession = models.InitLmSession()
 	global.LMTokenizer = models.InitTokenizer()
 
+	initial.InitKnowledgeRefreshCron()
+
 	// 2. Initiate default Gin router with logger and recovery middleware
 	routes.Router = gin.Default()
 

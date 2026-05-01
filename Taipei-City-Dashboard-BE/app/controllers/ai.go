@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"TaipeiCityDashboardBE/app/services/ai"
+	"TaipeiCityDashboardBE/app/services/ai/tools"
 	"TaipeiCityDashboardBE/app/util"
 	"context"
 	"fmt"
@@ -125,17 +126,7 @@ func ChatWithTWCC(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"status": "success",
 		"data": gin.H{
-			"session":     logEntry.SessionID,
-			"content":     logEntry.Answer,
-			"usage": gin.H{
-				"input_tokens":  logEntry.InputTokens,
-				"output_tokens": logEntry.OutputTokens,
-				"total_tokens":  logEntry.TotalTokens,
-			},
-			"tool_used":   logEntry.ToolUsed,
-			"latency_ms":  logEntry.LatencyMS,
-			"model":       logEntry.Model,
-			"provider":    logEntry.Provider,
+			"aiSummary": logEntry.Answer,
 		},
 	})
 }
@@ -215,23 +206,22 @@ func (input *AIChatInput) ToCallOptions() []llms.CallOption {
 		params["seed"] = *input.Seed
 	}
 
-	// Map Tools
-	if len(input.Tools) > 0 {
-		lt := make([]llms.Tool, 0)
-		for _, t := range input.Tools {
-			lt = append(lt, llms.Tool{
-				Type: t.Type,
-				Function: &llms.FunctionDefinition{
-					Name:        t.Function.Name,
-					Description: t.Function.Description,
-					Parameters:  t.Function.Parameters,
-				},
-			})
-		}
-		options = append(options, llms.WithTools(lt))
-		if input.ToolChoice != nil {
-			options = append(options, llms.WithToolChoice(input.ToolChoice))
-		}
+	// Map Tools：合併伺服器端預設 tools 與前端傳入的 tools
+	// 伺服器端 tools（如 search_knowledge）自動附加，前端無需自行帶入
+	allTools := tools.DefaultServerTools()
+	for _, t := range input.Tools {
+		allTools = append(allTools, llms.Tool{
+			Type: t.Type,
+			Function: &llms.FunctionDefinition{
+				Name:        t.Function.Name,
+				Description: t.Function.Description,
+				Parameters:  t.Function.Parameters,
+			},
+		})
+	}
+	options = append(options, llms.WithTools(allTools))
+	if input.ToolChoice != nil {
+		options = append(options, llms.WithToolChoice(input.ToolChoice))
 	}
 
 	if len(params) > 0 {

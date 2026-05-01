@@ -166,6 +166,13 @@ func GenVector(inputText string) ([]float32, error) {
 		log.Fatalf("ids len %d != attention_mask len %d", len(ids), len(attnMask))
 	}
 
+	// E5 ONNX model max sequence length is 512; truncate to avoid ONNX bounds error
+	const maxSeqLen = 512
+	if len(ids) > maxSeqLen {
+		ids = ids[:maxSeqLen]
+		attnMask = attnMask[:maxSeqLen]
+	}
+
 	seqLen := int64(len(ids))
 	batchSize := int64(1)
 
