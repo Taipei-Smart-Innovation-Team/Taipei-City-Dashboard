@@ -1,5 +1,6 @@
 <script setup>
 import { computed, ref } from "vue";
+import http from "../router/axios.js";
 // import "./styles/chartStyles.css";
 // import "./styles/toggleswitch.css";
 import "material-icons/iconfont/material-icons.css";
@@ -71,6 +72,7 @@ const props = defineProps({
 	addBtn: { type: Boolean, default: false },
 	infoBtn: { type: Boolean, default: false },
 	infoBtnText: { type: String, default: "組件資訊" },
+	aiSummaryBtn: { type: Boolean, default: false },
 	toggleDisable: { type: Boolean, default: false },
 	footer: { type: Boolean, default: true },
 	activeCity: { type: String, default: '' },
@@ -111,6 +113,32 @@ const toggleOn = computed({
 
 const mousePosition = ref({ x: null, y: null });
 const showTagTooltip = ref(false);
+
+const aiSummary = ref("");
+const aiLoading = ref(false);
+const aiError = ref(false);
+
+async function fetchAISummary() {
+	if (aiLoading.value) return;
+	aiLoading.value = true;
+	aiError.value = false;
+	aiSummary.value = "";
+	try {
+		const res = await http.post("/api/v1/ai/chat/twai", {
+			messages: [
+				{
+					role: "user",
+					content: `請摘要「${props.config.name}」的最新資料狀況`,
+				},
+			],
+		});
+		aiSummary.value = res.data?.data?.content || "";
+	} catch {
+		aiError.value = true;
+	} finally {
+		aiLoading.value = false;
+	}
+}
 
 // Parses time data into display format
 const dataTime = computed(() => {
@@ -500,13 +528,33 @@ function returnChartComponent(name, svg) {
         />
       </div>
       <div v-else />
-      <button
-        v-if="infoBtn"
-        @click="$emit('info', config)"
-      >
-        <p>{{ infoBtnText }}</p>
-        <span>arrow_circle_right</span>
-      </button>
+      <div class="dashboardcomponent-footer-right">
+        <button
+          v-if="aiSummaryBtn"
+          class="dashboardcomponent-ai-btn"
+          :class="{ 'ai-loading': aiLoading }"
+          :disabled="aiLoading"
+          @click="fetchAISummary"
+        >
+          <p>{{ aiLoading ? "查詢中..." : "AI 摘要" }}</p>
+          <span>auto_awesome</span>
+        </button>
+        <button
+          v-if="infoBtn"
+          @click="$emit('info', config)"
+        >
+          <p>{{ infoBtnText }}</p>
+          <span>arrow_circle_right</span>
+        </button>
+      </div>
+    </div>
+    <!-- AI Summary Panel -->
+    <div
+      v-if="aiSummaryBtn && (aiSummary || aiError)"
+      class="dashboardcomponent-ai-summary"
+    >
+      <p v-if="aiError" class="ai-error">AI 摘要服務暫時無法使用，請稍後再試。</p>
+      <p v-else>{{ aiSummary }}</p>
     </div>
     <div
       v-else-if="!mode.includes('map')"
@@ -820,6 +868,62 @@ button:hover {
 				color: var(--color-highlight);
 				user-select: none;
 			}
+		}
+
+		&-right {
+			display: flex;
+			align-items: center;
+			gap: 8px;
+		}
+	}
+
+	&-ai-btn {
+		display: flex;
+		align-items: center;
+		transition: opacity 0.2s;
+
+		&:hover {
+			opacity: 0.8;
+		}
+
+		&.ai-loading {
+			opacity: 0.5;
+			cursor: default;
+		}
+
+		span {
+			margin-left: 4px;
+			color: var(--color-highlight);
+			font-family: var(--font-icon);
+			font-size: var(--font-m);
+			user-select: none;
+		}
+
+		p {
+			max-height: 1.2rem;
+			color: var(--color-highlight);
+			font-size: var(--font-s);
+			user-select: none;
+		}
+	}
+
+	&-ai-summary {
+		padding: 8px var(--font-m);
+		background-color: var(--color-component-background);
+		border-top: 1px solid var(--color-border);
+		overflow-y: auto;
+		max-height: 120px;
+
+		p {
+			color: var(--color-complement-text);
+			font-size: var(--font-s);
+			line-height: 1.6;
+			white-space: pre-wrap;
+			overflow: visible;
+		}
+
+		.ai-error {
+			color: var(--color-border);
 		}
 	}
 }
