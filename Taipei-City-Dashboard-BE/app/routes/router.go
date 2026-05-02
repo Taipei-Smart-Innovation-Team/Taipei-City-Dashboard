@@ -211,7 +211,7 @@ func configureAIRoutes() {
 	aiRoutes := RouterGroup.Group("/ai")
 	aiRoutes.Use(middleware.LimitAPIRequests(global.ComponentLimitAPIRequestsTimes, global.LimitRequestsDuration))
 	aiRoutes.Use(middleware.LimitTotalRequests(global.ComponentLimitTotalRequestsTimes, global.LimitRequestsDuration))
-	aiRoutes.Use(middleware.IsLoggedIn())
+	// 不需登入，所有訪客皆可使用；rate limit 仍保護避免濫用
 	{
 		aiRoutes.POST("/chat/twai", controllers.ChatWithTWCC)
 	}

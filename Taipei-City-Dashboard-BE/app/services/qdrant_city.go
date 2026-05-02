@@ -5,16 +5,12 @@ import (
 	"TaipeiCityDashboardBE/global"
 	"bytes"
 	"context"
-	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
 	"io"
 	"log"
 	"net/http"
-	"os"
-	"path/filepath"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -26,12 +22,12 @@ var isCityKnowledgeRebuilding atomic.Bool
 // CityKnowledgeChunk represents a single knowledge unit to be embedded into Qdrant.
 type CityKnowledgeChunk struct {
 	Topic     string // e.g. "disaster"
-	SubTopic  string // e.g. "shelter", "water_level", "er_status"
-	City      string // "TP" | "NTP" | ""（空白表示跨市）
-	District  string // e.g. "中山區"；空白表示全市摘要
+	SubTopic  string // e.g. "er_status"
+	City      string // "TP" | "NTP" | ""
+	District  string // e.g. "板橋區"；空白表示全市摘要
 	Content   string // 自然語言摘要，供 LLM 讀取
-	Source    string // CSV 檔名
-	UpdatedAt string // RFC3339，讓 LLM 知道資料新鮮度
+	Source    string // 資料來源描述
+	UpdatedAt string // RFC3339
 }
 
 // chunkID generates a deterministic uint64 point ID.
@@ -42,102 +38,54 @@ func chunkID(topic, subTopic, city, district string) uint64 {
 	return h.Sum64()
 }
 
-// disasterDataPath returns the base path for disaster CSV files.
-func disasterDataPath() string {
-	p := os.Getenv("DISASTER_DATA_PATH")
-	if p == "" {
-		p = "./韌性防災資料"
-	}
-	return p
-}
-
-// RebuildCityKnowledgeCollection reads static/semi-static data for the given topic
-// and upserts them into the city_knowledge Qdrant collection.
-// Dynamic data (water_level, rainfall, er_status, earthquake) is handled by the cron job.
-func RebuildCityKnowledgeCollection(topic string) ([]CityKnowledgeChunk, error) {
-	if !isCityKnowledgeRebuilding.CompareAndSwap(false, true) {
-		return nil, fmt.Errorf("city knowledge rebuild is already in progress")
-	}
-	defer isCityKnowledgeRebuilding.Store(false)
-
-	log.Printf("Starting city_knowledge rebuild for topic: %s", topic)
-	ctx := context.Background()
-
-	var chunks []CityKnowledgeChunk
-
-	switch topic {
-	case "disaster":
-		if sc, err := readShelterStats(); err != nil {
-			log.Printf("Warning: shelter stats: %v", err)
-		} else {
-			chunks = append(chunks, sc...)
-		}
-		if pc, err := readPopulationStats(); err != nil {
-			log.Printf("Warning: population stats: %v", err)
-		} else {
-			chunks = append(chunks, pc...)
-		}
-	default:
-		return nil, fmt.Errorf("topic '%s' is not yet supported", topic)
-	}
-
-	if len(chunks) == 0 {
-		return chunks, fmt.Errorf("no chunks generated for topic '%s'", topic)
-	}
-
-	points, vectorSize, err := chunksToPoints(chunks)
-	if err != nil {
-		return chunks, fmt.Errorf("vector generation error: %w", err)
-	}
-
-	collectionName := global.Qdrant.CityCollection
-	if err := createCollectionIfNotExists(ctx, collectionName, uint64(vectorSize)); err != nil {
-		return chunks, fmt.Errorf("ensure collection error: %w", err)
-	}
-	if err := upsertPoints(ctx, collectionName, points); err != nil {
-		return chunks, fmt.Errorf("upsert error: %w", err)
-	}
-
-	log.Printf("city_knowledge rebuild complete: %d chunks upserted for topic '%s'", len(points), topic)
-	return chunks, nil
-}
-
-// GenerateAllChunks generates all chunks for a given topic (static + real-time).
+// GenerateAllChunks generates all chunks for a given topic.
 // Used by the unified cron job to refresh everything in one pass.
 func GenerateAllChunks(topic string) ([]CityKnowledgeChunk, error) {
 	var chunks []CityKnowledgeChunk
 
 	switch topic {
-	case "disaster":
-		if sc, err := readShelterStats(); err != nil {
-			log.Printf("Warning: shelter stats: %v", err)
-		} else {
-			chunks = append(chunks, sc...)
-		}
-		if pc, err := readPopulationStats(); err != nil {
-			log.Printf("Warning: population stats: %v", err)
-		} else {
-			chunks = append(chunks, pc...)
-		}
-		if wl, err := GenerateWaterLevelChunks(); err != nil {
-			log.Printf("Warning: water level: %v", err)
-		} else {
-			chunks = append(chunks, wl...)
-		}
-		if rf, err := GenerateRainfallChunks(); err != nil {
-			log.Printf("Warning: rainfall: %v", err)
-		} else {
-			chunks = append(chunks, rf...)
-		}
+	case "food_safety":
 		if er, err := GenerateERStatusChunks(); err != nil {
 			log.Printf("Warning: ER status: %v", err)
 		} else {
 			chunks = append(chunks, er...)
 		}
-		if eq, err := GenerateEarthquakeChunks(); err != nil {
-			log.Printf("Warning: earthquake: %v", err)
+		if dc, err := GenerateDiarrheaChunks(); err != nil {
+			log.Printf("Warning: diarrhea count: %v", err)
 		} else {
-			chunks = append(chunks, eq...)
+			chunks = append(chunks, dc...)
+		}
+	case "transportation":
+		if ub, err := GenerateUBikeChunks(); err != nil {
+			log.Printf("Warning: ubike: %v", err)
+		} else {
+			chunks = append(chunks, ub...)
+		}
+		if bn, err := GenerateBikeNetworkChunks(); err != nil {
+			log.Printf("Warning: bike_network: %v", err)
+		} else {
+			chunks = append(chunks, bn...)
+		}
+		if bs, err := GenerateBusInfoChunks(); err != nil {
+			log.Printf("Warning: bus_info: %v", err)
+		} else {
+			chunks = append(chunks, bs...)
+		}
+	case "population":
+		if pa, err := GeneratePopulationAgeChunks(); err != nil {
+			log.Printf("Warning: population_age: %v", err)
+		} else {
+			chunks = append(chunks, pa...)
+		}
+		if dr, err := GenerateDependencyRatioChunks(); err != nil {
+			log.Printf("Warning: dependency_ratio: %v", err)
+		} else {
+			chunks = append(chunks, dr...)
+		}
+		if em, err := GenerateEmploymentAgeChunks(); err != nil {
+			log.Printf("Warning: employment_age: %v", err)
+		} else {
+			chunks = append(chunks, em...)
 		}
 	default:
 		return nil, fmt.Errorf("topic '%s' is not yet supported", topic)
@@ -149,8 +97,7 @@ func GenerateAllChunks(topic string) ([]CityKnowledgeChunk, error) {
 	return chunks, nil
 }
 
-// UpsertCityKnowledgeChunks vectorizes and upserts a batch of chunks.
-// Called by the cron job to update dynamic data without touching the rest of the collection.
+// UpsertCityKnowledgeChunks vectorizes and upserts a batch of chunks into Qdrant.
 func UpsertCityKnowledgeChunks(chunks []CityKnowledgeChunk) error {
 	if len(chunks) == 0 {
 		return nil
@@ -170,11 +117,482 @@ func UpsertCityKnowledgeChunks(chunks []CityKnowledgeChunk) error {
 		return fmt.Errorf("upsert error: %w", err)
 	}
 
-	log.Printf("Upserted %d dynamic chunks into city_knowledge", len(points))
+	log.Printf("Upserted %d chunks into city_knowledge", len(points))
 	return nil
 }
 
-// chunksToPoints vectorizes CityKnowledgeChunks into qdrantPoints.
+// RebuildCityKnowledgeCollection is a manual trigger (POST /api/v1/qdrant/rebuild/city).
+func RebuildCityKnowledgeCollection(topic string) ([]CityKnowledgeChunk, error) {
+	if !isCityKnowledgeRebuilding.CompareAndSwap(false, true) {
+		return nil, fmt.Errorf("city knowledge rebuild is already in progress")
+	}
+	defer isCityKnowledgeRebuilding.Store(false)
+
+	chunks, err := GenerateAllChunks(topic)
+	if err != nil {
+		return nil, err
+	}
+	if err := UpsertCityKnowledgeChunks(chunks); err != nil {
+		return chunks, err
+	}
+	return chunks, nil
+}
+
+// -- Data source: food_safety_medical (PostgreSQL) --
+
+type foodSafetyMedicalRow struct {
+	City          string     `gorm:"column:city"`
+	Town          string     `gorm:"column:town"`
+	HospitalName  string     `gorm:"column:hospital_name"`
+	IsFull119     bool       `gorm:"column:is_full_119"`
+	WaitSee       int        `gorm:"column:wait_see"`
+	WaitAdmission int        `gorm:"column:wait_admission"`
+	WaitICU       int        `gorm:"column:wait_icu"`
+	DataTime      *time.Time `gorm:"column:data_time"`
+}
+
+// GenerateERStatusChunks queries food_safety_medical from PostgreSQL → one chunk per district.
+func GenerateERStatusChunks() ([]CityKnowledgeChunk, error) {
+	if models.DBDashboard == nil {
+		return nil, fmt.Errorf("DBDashboard is not initialized")
+	}
+
+	var rows []foodSafetyMedicalRow
+	if err := models.DBDashboard.
+		Table("food_safety_medical").
+		Select("city, town, hospital_name, is_full_119, wait_see, wait_admission, wait_icu, data_time").
+		Order("city, town, hospital_name").
+		Find(&rows).Error; err != nil {
+		return nil, fmt.Errorf("query food_safety_medical: %w", err)
+	}
+	if len(rows) == 0 {
+		return nil, fmt.Errorf("food_safety_medical: no rows")
+	}
+
+	now := time.Now().Format(time.RFC3339)
+
+	type hospLine struct{ text string }
+	type districtKey struct{ cityCode, district string }
+	grouped := map[districtKey][]hospLine{}
+	var keyOrder []districtKey
+	seen := map[districtKey]bool{}
+
+	for _, row := range rows {
+		var cityCode string
+		switch {
+		case strings.Contains(row.City, "臺北") || strings.Contains(row.City, "台北"):
+			cityCode = "TP"
+		case strings.Contains(row.City, "新北"):
+			cityCode = "NTP"
+		default:
+			continue
+		}
+
+		fullMark := ""
+		if row.IsFull119 {
+			fullMark = "滿床 "
+		}
+		updatedAt := now[:16]
+		if row.DataTime != nil {
+			updatedAt = row.DataTime.Format("2006-01-02T15:04")
+		}
+		text := fmt.Sprintf("%s%s（候診%d人、待住院%d人、待加護%d人，更新%s）",
+			fullMark, row.HospitalName,
+			row.WaitSee, row.WaitAdmission, row.WaitICU, updatedAt,
+		)
+
+		district := strings.TrimSpace(row.Town)
+		if district == "" {
+			district = cityDisplayName(cityCode)
+		}
+		key := districtKey{cityCode, district}
+		if !seen[key] {
+			keyOrder = append(keyOrder, key)
+			seen[key] = true
+		}
+		grouped[key] = append(grouped[key], hospLine{text})
+	}
+
+	var chunks []CityKnowledgeChunk
+	for _, key := range keyOrder {
+		lines := grouped[key]
+		parts := make([]string, len(lines))
+		for i, l := range lines {
+			parts[i] = l.text
+		}
+		cityName := cityDisplayName(key.cityCode)
+		chunks = append(chunks, CityKnowledgeChunk{
+			Topic: "food_safety", SubTopic: "er_status",
+			City: key.cityCode, District: key.district,
+			Content:   fmt.Sprintf("【%s%s急診狀況 %s】%s", cityName, key.district, now[:16], strings.Join(parts, "；")),
+			Source:    "food_safety_medical (PostgreSQL)", UpdatedAt: now,
+		})
+	}
+	return chunks, nil
+}
+
+// -- Data source: food_safety_diarrhea_count (PostgreSQL) --
+
+type diarrheaCountRow struct {
+	City          string     `gorm:"column:city"`
+	CityCode      string     `gorm:"column:city_code"`
+	DiarrheaCount int        `gorm:"column:diarrhea_count"`
+	DataTime      *time.Time `gorm:"column:data_time"`
+}
+
+// GenerateDiarrheaChunks queries food_safety_diarrhea_count → one chunk per city (latest data).
+func GenerateDiarrheaChunks() ([]CityKnowledgeChunk, error) {
+	if models.DBDashboard == nil {
+		return nil, fmt.Errorf("DBDashboard is not initialized")
+	}
+
+	// 取每個城市最新一筆
+	var rows []diarrheaCountRow
+	if err := models.DBDashboard.
+		Table("food_safety_diarrhea_count").
+		Select("city, city_code, diarrhea_count, data_time").
+		Where("data_time IN (?)",
+			models.DBDashboard.Table("food_safety_diarrhea_count").
+				Select("MAX(data_time)").
+				Group("city_code"),
+		).
+		Find(&rows).Error; err != nil {
+		return nil, fmt.Errorf("query food_safety_diarrhea_count: %w", err)
+	}
+	if len(rows) == 0 {
+		return nil, fmt.Errorf("food_safety_diarrhea_count: no rows")
+	}
+
+	now := time.Now().Format(time.RFC3339)
+	var chunks []CityKnowledgeChunk
+
+	for _, row := range rows {
+		var cityCode string
+		switch strings.ToLower(row.CityCode) {
+		case "tpe":
+			cityCode = "TP"
+		case "nwt":
+			cityCode = "NTP"
+		default:
+			continue
+		}
+
+		dataDate := now[:10]
+		if row.DataTime != nil {
+			dataDate = row.DataTime.Format("2006-01-02")
+		}
+
+		chunks = append(chunks, CityKnowledgeChunk{
+			Topic: "food_safety", SubTopic: "diarrhea_count",
+			City:      cityCode,
+			Content:   fmt.Sprintf("【%s腹瀉就診人數 %s】腹瀉就診人數 %d 人", row.City, dataDate, row.DiarrheaCount),
+			Source:    "food_safety_diarrhea_count (PostgreSQL)", UpdatedAt: now,
+		})
+	}
+	return chunks, nil
+}
+
+// -- Data source: transportation --
+
+type ubikeRow struct {
+	ServiceStatus        string `gorm:"column:service_status"`
+	AvailableRentGeneral int    `gorm:"column:available_rent_general_bikes"`
+	AvailableRentElectric int   `gorm:"column:available_rent_electric_bikes"`
+	AvailableReturn      int    `gorm:"column:available_return_bikes"`
+}
+
+// GenerateUBikeChunks aggregates YouBike realtime → one chunk per city.
+func GenerateUBikeChunks() ([]CityKnowledgeChunk, error) {
+	if models.DBDashboard == nil {
+		return nil, fmt.Errorf("DBDashboard is not initialized")
+	}
+	type agg struct{ total, normal, rentGeneral, rentElectric, returnSlots int }
+	cities := map[string]*agg{"TP": {}, "NTP": {}}
+	tables := map[string]string{"TP": "tran_ubike_realtime", "NTP": "tran_ubike_realtime_new_tpe"}
+
+	for cityCode, table := range tables {
+		var rows []ubikeRow
+		if err := models.DBDashboard.Table(table).Find(&rows).Error; err != nil {
+			return nil, fmt.Errorf("query %s: %w", table, err)
+		}
+		a := cities[cityCode]
+		for _, r := range rows {
+			a.total++
+			if r.ServiceStatus == "正常營運" {
+				a.normal++
+			}
+			a.rentGeneral += r.AvailableRentGeneral
+			a.rentElectric += r.AvailableRentElectric
+			a.returnSlots += r.AvailableReturn
+		}
+	}
+
+	now := time.Now().Format(time.RFC3339)
+	var chunks []CityKnowledgeChunk
+	for _, cityCode := range []string{"TP", "NTP"} {
+		a := cities[cityCode]
+		if a.total == 0 {
+			continue
+		}
+		chunks = append(chunks, CityKnowledgeChunk{
+			Topic: "transportation", SubTopic: "ubike", City: cityCode,
+			Content: fmt.Sprintf("【%sYouBike即時狀況 %s】共%d站，正常營運%d站，可借一般車%d輛、電動車%d輛，可還車位%d個",
+				cityDisplayName(cityCode), now[:16], a.total, a.normal, a.rentGeneral, a.rentElectric, a.returnSlots),
+			Source: "tran_ubike_realtime (PostgreSQL)", UpdatedAt: now,
+		})
+	}
+	return chunks, nil
+}
+
+type bikeNetworkRow struct {
+	City         string  `gorm:"column:city"`
+	CityCode     string  `gorm:"column:city_code"`
+	CyclingType  string  `gorm:"column:cycling_type"`
+	CyclingLength float64 `gorm:"column:cycling_length"`
+}
+
+// GenerateBikeNetworkChunks aggregates bike routes → one chunk per city.
+func GenerateBikeNetworkChunks() ([]CityKnowledgeChunk, error) {
+	if models.DBDashboard == nil {
+		return nil, fmt.Errorf("DBDashboard is not initialized")
+	}
+	type agg struct{ city string; routes int; totalLength float64 }
+	cities := map[string]*agg{
+		"TP":  {city: "台北市"},
+		"NTP": {city: "新北市"},
+	}
+	tables := map[string]string{"TP": "bike_network_tpe", "NTP": "bike_network_new_tpe"}
+
+	for cityCode, table := range tables {
+		var rows []bikeNetworkRow
+		if err := models.DBDashboard.Table(table).
+			Select("city, city_code, cycling_type, cycling_length").
+			Find(&rows).Error; err != nil {
+			return nil, fmt.Errorf("query %s: %w", table, err)
+		}
+		a := cities[cityCode]
+		for _, r := range rows {
+			a.routes++
+			a.totalLength += r.CyclingLength
+		}
+	}
+
+	now := time.Now().Format(time.RFC3339)
+	var chunks []CityKnowledgeChunk
+	for _, cityCode := range []string{"TP", "NTP"} {
+		a := cities[cityCode]
+		if a.routes == 0 {
+			continue
+		}
+		chunks = append(chunks, CityKnowledgeChunk{
+			Topic: "transportation", SubTopic: "bike_network", City: cityCode,
+			Content: fmt.Sprintf("【%s自行車路網】共%d條路段，總長度約%.0f公尺（%.1f公里）",
+				a.city, a.routes, a.totalLength, a.totalLength/1000),
+			Source: "bike_network (PostgreSQL)", UpdatedAt: now,
+		})
+	}
+	return chunks, nil
+}
+
+type busInfoRow struct {
+	IsElectric   int `gorm:"column:is_electric"`
+	IsLowFloor   int `gorm:"column:is_low_floor"`
+	HasWifi      int `gorm:"column:has_wifi"`
+	HasLiftOrRamp int `gorm:"column:has_lift_or_ramp"`
+}
+
+// GenerateBusInfoChunks aggregates bus fleet info → one chunk per city.
+func GenerateBusInfoChunks() ([]CityKnowledgeChunk, error) {
+	if models.DBDashboard == nil {
+		return nil, fmt.Errorf("DBDashboard is not initialized")
+	}
+	type agg struct{ total, electric, lowFloor, wifi, accessible int }
+	cities := map[string]*agg{"TP": {}, "NTP": {}}
+	tables := map[string]string{"TP": "bus_info_tpe", "NTP": "bus_info_new_tpe"}
+
+	for cityCode, table := range tables {
+		var rows []busInfoRow
+		if err := models.DBDashboard.Table(table).Find(&rows).Error; err != nil {
+			return nil, fmt.Errorf("query %s: %w", table, err)
+		}
+		a := cities[cityCode]
+		for _, r := range rows {
+			a.total++
+			if r.IsElectric == 1 { a.electric++ }
+			if r.IsLowFloor == 1 { a.lowFloor++ }
+			if r.HasWifi == 1 { a.wifi++ }
+			if r.HasLiftOrRamp == 1 { a.accessible++ }
+		}
+	}
+
+	now := time.Now().Format(time.RFC3339)
+	var chunks []CityKnowledgeChunk
+	for _, cityCode := range []string{"TP", "NTP"} {
+		a := cities[cityCode]
+		if a.total == 0 {
+			continue
+		}
+		chunks = append(chunks, CityKnowledgeChunk{
+			Topic: "transportation", SubTopic: "bus", City: cityCode,
+			Content: fmt.Sprintf("【%s公車車隊資訊】共%d輛，電動車%d輛、低地板車%d輛、無障礙車%d輛、有WiFi車%d輛",
+				cityDisplayName(cityCode), a.total, a.electric, a.lowFloor, a.accessible, a.wifi),
+			Source: "bus_info (PostgreSQL)", UpdatedAt: now,
+		})
+	}
+	return chunks, nil
+}
+
+// -- Data source: population --
+
+type populationAgeRow struct {
+	Year                          int     `gorm:"column:year"`
+	YoungPopulation               int     `gorm:"column:young_population"`
+	YoungPopulationPct            float64 `gorm:"column:young_population_percentage"`
+	WorkingAgePopulation          int     `gorm:"column:working_age_population"`
+	WorkingAgePopulationPct       float64 `gorm:"column:working_age_population_percentage"`
+	ElderlyPopulation             int     `gorm:"column:elderly_population"`
+	ElderlyPopulationPct          float64 `gorm:"column:elderly_population_percentage"`
+	TotalDependencyRatio          float64 `gorm:"column:total_dependency_ratio"`
+	AgingIndex                    float64 `gorm:"column:aging_index"`
+}
+
+// GeneratePopulationAgeChunks queries latest year population distribution → one chunk per city.
+func GeneratePopulationAgeChunks() ([]CityKnowledgeChunk, error) {
+	if models.DBDashboard == nil {
+		return nil, fmt.Errorf("DBDashboard is not initialized")
+	}
+	tables := map[string]string{"TP": "population_age_distribution_tpe", "NTP": "population_age_distribution_new_tpe"}
+	now := time.Now().Format(time.RFC3339)
+	var chunks []CityKnowledgeChunk
+
+	for _, cityCode := range []string{"TP", "NTP"} {
+		table := tables[cityCode]
+		var row populationAgeRow
+		if err := models.DBDashboard.Table(table).
+			Order("year DESC").Limit(1).Find(&row).Error; err != nil {
+			log.Printf("Warning: %s: %v", table, err)
+			continue
+		}
+		chunks = append(chunks, CityKnowledgeChunk{
+			Topic: "population", SubTopic: "age_distribution", City: cityCode,
+			Content: fmt.Sprintf("【%s人口年齡分佈 %d年】幼年人口%d人(%.1f%%)，工作年齡人口%d人(%.1f%%)，老年人口%d人(%.1f%%)，總扶養比%.2f，老化指數%.2f",
+				cityDisplayName(cityCode), row.Year,
+				row.YoungPopulation, row.YoungPopulationPct,
+				row.WorkingAgePopulation, row.WorkingAgePopulationPct,
+				row.ElderlyPopulation, row.ElderlyPopulationPct,
+				row.TotalDependencyRatio, row.AgingIndex),
+			Source: table + " (PostgreSQL)", UpdatedAt: now,
+		})
+	}
+	return chunks, nil
+}
+
+type dependencyRatioRow struct {
+	EndOfYear                     string  `gorm:"column:end_of_year"`
+	YoungPopulation               int     `gorm:"column:young_population"`
+	YoungPopulationPct            float64 `gorm:"column:young_population_percentage"`
+	WorkingAgePopulation          int     `gorm:"column:working_age_population"`
+	ElderlyPopulation             int     `gorm:"column:elderly_population"`
+	ElderlyPopulationPct          float64 `gorm:"column:elderly_population_percentage"`
+	ElderlyDependencyRatio        float64 `gorm:"column:elderly_dependency_ratio"`
+	YouthDependencyRatio          float64 `gorm:"column:youth_dependency_ratio"`
+	TotalDependencyRatio          float64 `gorm:"column:total_dependency_ratio"`
+	AgingIndex                    float64 `gorm:"column:aging_index"`
+}
+
+// GenerateDependencyRatioChunks queries latest year dependency ratio → one chunk per city.
+func GenerateDependencyRatioChunks() ([]CityKnowledgeChunk, error) {
+	if models.DBDashboard == nil {
+		return nil, fmt.Errorf("DBDashboard is not initialized")
+	}
+	tables := map[string]string{"TP": "dependency_ratio_and_aging_index_tpe", "NTP": "dependency_ratio_and_aging_index_new_tpe"}
+	now := time.Now().Format(time.RFC3339)
+	var chunks []CityKnowledgeChunk
+
+	for _, cityCode := range []string{"TP", "NTP"} {
+		table := tables[cityCode]
+		var row dependencyRatioRow
+		if err := models.DBDashboard.Table(table).
+			Order("end_of_year DESC").Limit(1).Find(&row).Error; err != nil {
+			log.Printf("Warning: %s: %v", table, err)
+			continue
+		}
+		chunks = append(chunks, CityKnowledgeChunk{
+			Topic: "population", SubTopic: "dependency_ratio", City: cityCode,
+			Content: fmt.Sprintf("【%s扶養比與老化指數 %s年】幼年人口%d人(%.1f%%)，老年人口%d人(%.1f%%)，老年扶養比%.2f，幼年扶養比%.2f，總扶養比%.2f，老化指數%.2f",
+				cityDisplayName(cityCode), row.EndOfYear,
+				row.YoungPopulation, row.YoungPopulationPct,
+				row.ElderlyPopulation, row.ElderlyPopulationPct,
+				row.ElderlyDependencyRatio, row.YouthDependencyRatio,
+				row.TotalDependencyRatio, row.AgingIndex),
+			Source: table + " (PostgreSQL)", UpdatedAt: now,
+		})
+	}
+	return chunks, nil
+}
+
+type employmentAgeRow struct {
+	Year         string  `gorm:"column:year"`
+	Gender       string  `gorm:"column:gender"`
+	AgeStructure string  `gorm:"column:age_structure"`
+	Percentage   float64 `gorm:"column:percentage"`
+}
+
+// GenerateEmploymentAgeChunks queries latest year employment age structure → one chunk per city per gender.
+func GenerateEmploymentAgeChunks() ([]CityKnowledgeChunk, error) {
+	if models.DBDashboard == nil {
+		return nil, fmt.Errorf("DBDashboard is not initialized")
+	}
+	tables := map[string]string{"TP": "employment_age_structure_tpe", "NTP": "employment_age_structure_new_tpe"}
+	now := time.Now().Format(time.RFC3339)
+	var chunks []CityKnowledgeChunk
+
+	for _, cityCode := range []string{"TP", "NTP"} {
+		table := tables[cityCode]
+		// 取最新年度
+		var latestYear struct{ Year string `gorm:"column:year"` }
+		if err := models.DBDashboard.Table(table).Select("year").Order("year DESC").Limit(1).Scan(&latestYear).Error; err != nil {
+			log.Printf("Warning: %s latest year: %v", table, err)
+			continue
+		}
+
+		var rows []employmentAgeRow
+		if err := models.DBDashboard.Table(table).
+			Where("year = ?", latestYear.Year).
+			Order("gender, age_structure").
+			Find(&rows).Error; err != nil {
+			log.Printf("Warning: %s: %v", table, err)
+			continue
+		}
+
+		// group by gender
+		grouped := map[string][]string{}
+		for _, r := range rows {
+			if r.AgeStructure == "就業人口" {
+				continue // skip total row
+			}
+			grouped[r.Gender] = append(grouped[r.Gender], fmt.Sprintf("%s:%.1f%%", r.AgeStructure, r.Percentage))
+		}
+
+		for _, gender := range []string{"總計", "男", "女"} {
+			parts, ok := grouped[gender]
+			if !ok || len(parts) == 0 {
+				continue
+			}
+			chunks = append(chunks, CityKnowledgeChunk{
+				Topic: "population", SubTopic: "employment_age", City: cityCode,
+				District: gender,
+				Content: fmt.Sprintf("【%s就業人口年齡結構(%s) %s年】%s",
+					cityDisplayName(cityCode), gender, latestYear.Year, strings.Join(parts, "、")),
+				Source: table + " (PostgreSQL)", UpdatedAt: now,
+			})
+		}
+	}
+	return chunks, nil
+}
+
+// -- Qdrant helpers --
+
 func chunksToPoints(chunks []CityKnowledgeChunk) ([]qdrantPoint, int, error) {
 	var points []qdrantPoint
 	var vectorSize int
@@ -208,13 +626,8 @@ func chunksToPoints(chunks []CityKnowledgeChunk) ([]qdrantPoint, int, error) {
 	return points, vectorSize, nil
 }
 
-// createCollectionIfNotExists creates the Qdrant collection only if it doesn't exist.
-// Unlike recreateCollection, this does NOT delete existing data.
 func createCollectionIfNotExists(ctx context.Context, collectionName string, vectorSize uint64) error {
 	cfg := global.Qdrant
-
-	// PUT is idempotent in newer Qdrant versions but older versions return error if exists.
-	// We use GET first to check existence.
 	checkURL := fmt.Sprintf("%s/collections/%s", cfg.Url, collectionName)
 	checkReq, _ := http.NewRequestWithContext(ctx, http.MethodGet, checkURL, nil)
 	if cfg.ApiKey != "" {
@@ -231,7 +644,6 @@ func createCollectionIfNotExists(ctx context.Context, collectionName string, vec
 		return nil
 	}
 
-	// Create collection
 	log.Printf("Creating collection '%s' with vector size %d", collectionName, vectorSize)
 	createBody, _ := json.Marshal(map[string]interface{}{
 		"vectors": map[string]interface{}{
@@ -248,413 +660,16 @@ func createCollectionIfNotExists(ctx context.Context, collectionName string, vec
 	if cfg.ApiKey != "" {
 		createReq.Header.Set("api-key", cfg.ApiKey)
 	}
-
 	createResp, err := http.DefaultClient.Do(createReq)
 	if err != nil {
 		return fmt.Errorf("create collection error: %w", err)
 	}
 	defer createResp.Body.Close()
-
 	if createResp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(createResp.Body)
 		return fmt.Errorf("create collection returned %s: %s", createResp.Status, string(b))
 	}
 	return nil
-}
-
-// -- Static CSV Readers --
-
-// readShelterStats reads shelter_stats.csv → one chunk per district.
-func readShelterStats() ([]CityKnowledgeChunk, error) {
-	filePath := filepath.Join(disasterDataPath(), "收容所", "避難所", "shelter_stats.csv")
-	now := time.Now().Format(time.RFC3339)
-
-	records, err := readCSV(filePath)
-	if err != nil {
-		return nil, err
-	}
-	idx := csvIndex(records[0])
-
-	var chunks []CityKnowledgeChunk
-	for _, row := range records[1:] {
-		if len(row) <= maxIdx(idx) {
-			continue
-		}
-		city := row[idx["city"]]
-		district := row[idx["district"]]
-		cityName := cityDisplayName(city)
-
-		content := fmt.Sprintf(
-			"【%s%s避難所資訊】總容量 %s 人，其中 %s 所具無障礙/弱勢友善設施。"+
-				"依災害類型支援數量：水災 %s 所、地震 %s 所、土石流 %s 所、海嘯 %s 所。",
-			cityName, district,
-			row[idx["total_capacity"]],
-			row[idx["weak_friendly_count"]],
-			row[idx["flood_count"]],
-			row[idx["earthquake_count"]],
-			row[idx["landslide_count"]],
-			row[idx["tsunami_count"]],
-		)
-		chunks = append(chunks, CityKnowledgeChunk{
-			Topic: "disaster", SubTopic: "shelter",
-			City: city, District: district,
-			Content: content, Source: "shelter_stats.csv", UpdatedAt: now,
-		})
-	}
-	return chunks, nil
-}
-
-// readPopulationStats reads population_stats.csv → one chunk per district.
-func readPopulationStats() ([]CityKnowledgeChunk, error) {
-	filePath := filepath.Join(disasterDataPath(), "收容所", "總人口", "population_stats.csv")
-	now := time.Now().Format(time.RFC3339)
-
-	records, err := readCSV(filePath)
-	if err != nil {
-		return nil, err
-	}
-	idx := csvIndex(records[0])
-
-	var chunks []CityKnowledgeChunk
-	for _, row := range records[1:] {
-		if len(row) <= maxIdx(idx) {
-			continue
-		}
-		city := row[idx["city"]]
-		district := row[idx["district"]]
-		if district == "總計" || strings.TrimSpace(district) == "" {
-			continue
-		}
-		cityName := cityDisplayName(city)
-
-		content := fmt.Sprintf(
-			"【%s%s人口統計】總人口 %s 人（男 %s 人、女 %s 人），共 %s 戶。",
-			cityName, district,
-			row[idx["total_population"]],
-			row[idx["male"]],
-			row[idx["female"]],
-			row[idx["households"]],
-		)
-		chunks = append(chunks, CityKnowledgeChunk{
-			Topic: "disaster", SubTopic: "population",
-			City: city, District: district,
-			Content: content, Source: "population_stats.csv", UpdatedAt: now,
-		})
-	}
-	return chunks, nil
-}
-
-// -- Dynamic Summary Generators (called by cron job) --
-
-// GenerateWaterLevelChunks reads water_level.csv → one chunk per district.
-// District is parsed from the address field (e.g. "台北市大同區星耀里" → city=TP, district=大同區).
-func GenerateWaterLevelChunks() ([]CityKnowledgeChunk, error) {
-	filePath := filepath.Join(disasterDataPath(), "水災", "河川", "water_level.csv")
-	now := time.Now().Format(time.RFC3339)
-
-	records, err := readCSV(filePath)
-	if err != nil {
-		return nil, err
-	}
-	idx := csvIndex(records[0])
-
-	type stationInfo struct {
-		name   string
-		level  float64
-		status string
-	}
-	type districtKey struct{ cityCode, district string }
-	grouped := map[districtKey][]stationInfo{}
-	// preserve insertion order for deterministic output
-	var keyOrder []districtKey
-	seen := map[districtKey]bool{}
-
-	for _, row := range records[1:] {
-		if len(row) <= maxIdx(idx) {
-			continue
-		}
-		addr := row[idx["address"]]
-		name := row[idx["station_name"]]
-		levelStr := row[idx["water_level"]]
-		a1Str := row[idx["alert_level_1"]]
-		a2Str := row[idx["alert_level_2"]]
-		a3Str := row[idx["alert_level_3"]]
-
-		level, _ := strconv.ParseFloat(levelStr, 64)
-		a1, _ := strconv.ParseFloat(a1Str, 64)
-		a2, _ := strconv.ParseFloat(a2Str, 64)
-		a3, _ := strconv.ParseFloat(a3Str, 64)
-
-		status := "正常"
-		if a3 > 0 && level >= a3 {
-			status = "超過三級警戒"
-		} else if a2 > 0 && level >= a2 {
-			status = "超過二級警戒"
-		} else if a1 > 0 && level >= a1 {
-			status = "超過一級警戒"
-		}
-
-		cityCode, district := parseCityDistrict(addr)
-		if district == "" {
-			continue
-		}
-		key := districtKey{cityCode, district}
-		if !seen[key] {
-			keyOrder = append(keyOrder, key)
-			seen[key] = true
-		}
-		grouped[key] = append(grouped[key], stationInfo{name, level, status})
-	}
-
-	var chunks []CityKnowledgeChunk
-	for _, key := range keyOrder {
-		stations := grouped[key]
-		parts := make([]string, len(stations))
-		for i, s := range stations {
-			parts[i] = fmt.Sprintf("%s：%.2fm（%s）", s.name, s.level, s.status)
-		}
-		cityName := cityDisplayName(key.cityCode)
-		chunks = append(chunks, CityKnowledgeChunk{
-			Topic: "disaster", SubTopic: "water_level",
-			City: key.cityCode, District: key.district,
-			Content:   fmt.Sprintf("【%s%s河川水位 %s】%s", cityName, key.district, now[:16], strings.Join(parts, "；")),
-			Source:    "water_level.csv", UpdatedAt: now,
-		})
-	}
-	return chunks, nil
-}
-
-// GenerateERStatusChunks reads er.csv → summary chunk per city.
-func GenerateERStatusChunks() ([]CityKnowledgeChunk, error) {
-	filePath := filepath.Join(disasterDataPath(), "醫療資源", "er.csv")
-	now := time.Now().Format(time.RFC3339)
-
-	records, err := readCSV(filePath)
-	if err != nil {
-		return nil, err
-	}
-	idx := csvIndex(records[0])
-
-	type hospLine struct{ text string }
-	linesTP := []hospLine{}
-	linesNTP := []hospLine{}
-
-	for _, row := range records[1:] {
-		if len(row) <= maxIdx(idx) {
-			continue
-		}
-		city := row[idx["city"]]
-		name := row[idx["hospital_name"]]
-		fullMark := ""
-		if row[idx["is_full_119"]] == "1" {
-			fullMark = "🔴滿床 "
-		}
-		text := fmt.Sprintf("%s%s（候診%s人、待住院%s人、待加護%s人）",
-			fullMark, name,
-			row[idx["wait_see"]],
-			row[idx["wait_admission"]],
-			row[idx["wait_icu"]],
-		)
-		line := hospLine{text}
-		if city == "臺北市" || city == "台北市" {
-			linesTP = append(linesTP, line)
-		} else {
-			linesNTP = append(linesNTP, line)
-		}
-	}
-
-	build := func(lines []hospLine, cityName, cityCode string) CityKnowledgeChunk {
-		parts := make([]string, len(lines))
-		for i, l := range lines {
-			parts[i] = l.text
-		}
-		return CityKnowledgeChunk{
-			Topic: "disaster", SubTopic: "er_status", City: cityCode,
-			Content:   fmt.Sprintf("【%s急診狀況 %s】%s", cityName, now[:16], strings.Join(parts, "；")),
-			Source:    "er.csv", UpdatedAt: now,
-		}
-	}
-
-	var chunks []CityKnowledgeChunk
-	if len(linesTP) > 0 {
-		chunks = append(chunks, build(linesTP, "台北市", "TP"))
-	}
-	if len(linesNTP) > 0 {
-		chunks = append(chunks, build(linesNTP, "新北市", "NTP"))
-	}
-	return chunks, nil
-}
-
-// GenerateRainfallChunks reads rainfull.csv → one chunk per district.
-// The CSV has explicit city and district columns, so no parsing is needed.
-func GenerateRainfallChunks() ([]CityKnowledgeChunk, error) {
-	filePath := filepath.Join(disasterDataPath(), "水災", "降雨", "rainfull.csv")
-	now := time.Now().Format(time.RFC3339)
-
-	records, err := readCSV(filePath)
-	if err != nil {
-		return nil, err
-	}
-	idx := csvIndex(records[0])
-
-	type stationStats struct {
-		rain1hr  float64
-		rain24hr float64
-	}
-	type districtKey struct{ cityCode, district string }
-	grouped := map[districtKey][]stationStats{}
-	var keyOrder []districtKey
-	seen := map[districtKey]bool{}
-
-	for _, row := range records[1:] {
-		if len(row) <= maxIdx(idx) {
-			continue
-		}
-		city := row[idx["city"]]
-		district := strings.TrimSpace(row[idx["district"]])
-		if district == "" {
-			continue
-		}
-		var cityCode string
-		if city == "臺北市" || city == "台北市" {
-			cityCode = "TP"
-		} else if city == "新北市" {
-			cityCode = "NTP"
-		} else {
-			continue
-		}
-
-		rain1hr, _ := strconv.ParseFloat(row[idx["rain_1hr"]], 64)
-		rain24hr, _ := strconv.ParseFloat(row[idx["rain_24hr"]], 64)
-
-		key := districtKey{cityCode, district}
-		if !seen[key] {
-			keyOrder = append(keyOrder, key)
-			seen[key] = true
-		}
-		grouped[key] = append(grouped[key], stationStats{rain1hr, rain24hr})
-	}
-
-	var chunks []CityKnowledgeChunk
-	for _, key := range keyOrder {
-		stats := grouped[key]
-		var maxRain1hr, maxRain24hr float64
-		for _, s := range stats {
-			if s.rain1hr > maxRain1hr {
-				maxRain1hr = s.rain1hr
-			}
-			if s.rain24hr > maxRain24hr {
-				maxRain24hr = s.rain24hr
-			}
-		}
-		cityName := cityDisplayName(key.cityCode)
-		chunks = append(chunks, CityKnowledgeChunk{
-			Topic: "disaster", SubTopic: "rainfall",
-			City: key.cityCode, District: key.district,
-			Content: fmt.Sprintf("【%s%s降雨狀況 %s】共%d個測站；最大時雨量%.1fmm、24小時最大累積%.1fmm",
-				cityName, key.district, now[:16], len(stats), maxRain1hr, maxRain24hr),
-			Source:    "rainfull.csv", UpdatedAt: now,
-		})
-	}
-	return chunks, nil
-}
-
-// GenerateEarthquakeChunks reads earthquake.csv → one summary chunk.
-func GenerateEarthquakeChunks() ([]CityKnowledgeChunk, error) {
-	filePath := filepath.Join(disasterDataPath(), "地震", "earthquake.csv")
-	now := time.Now().Format(time.RFC3339)
-
-	records, err := readCSV(filePath)
-	if err != nil {
-		return nil, err
-	}
-	idx := csvIndex(records[0])
-
-	parts := []string{}
-	for i, row := range records[1:] {
-		if i >= 10 || len(row) <= maxIdx(idx) {
-			break
-		}
-		dateStr := row[idx["update_time"]]
-		if len(dateStr) >= 10 {
-			dateStr = dateStr[:10]
-		}
-		parts = append(parts, fmt.Sprintf("%s %s站 強度%s",
-			dateStr, row[idx["station_name"]], row[idx["intensity"]]))
-	}
-
-	return []CityKnowledgeChunk{{
-		Topic: "disaster", SubTopic: "earthquake",
-		Content:   fmt.Sprintf("【近期地震紀錄 %s】%s", now[:16], strings.Join(parts, "；")),
-		Source:    "earthquake.csv", UpdatedAt: now,
-	}}, nil
-}
-
-// -- Utility helpers --
-
-func readCSV(filePath string) ([][]string, error) {
-	f, err := os.Open(filePath)
-	if err != nil {
-		return nil, fmt.Errorf("open %s: %w", filePath, err)
-	}
-	defer f.Close()
-
-	r := csv.NewReader(f)
-	r.LazyQuotes = true
-	records, err := r.ReadAll()
-	if err != nil {
-		return nil, fmt.Errorf("read csv %s: %w", filePath, err)
-	}
-	if len(records) < 2 {
-		return nil, fmt.Errorf("csv %s has no data rows", filePath)
-	}
-	return records, nil
-}
-
-// csvIndex builds a column-name → index map from the header row.
-func csvIndex(header []string) map[string]int {
-	m := make(map[string]int, len(header))
-	for i, h := range header {
-		m[strings.TrimSpace(h)] = i
-	}
-	return m
-}
-
-// maxIdx returns the maximum index value in the map (used for bounds checking).
-func maxIdx(m map[string]int) int {
-	max := 0
-	for _, v := range m {
-		if v > max {
-			max = v
-		}
-	}
-	return max
-}
-
-// parseCityDistrict extracts cityCode and district from an address string.
-// e.g. "台北市大同區星耀里" → ("TP", "大同區")
-// e.g. "新北市三峽區三峽橋" → ("NTP", "三峽區")
-func parseCityDistrict(addr string) (cityCode, district string) {
-	var rest string
-	if strings.Contains(addr, "臺北市") {
-		cityCode = "TP"
-		rest = addr[strings.Index(addr, "臺北市")+len("臺北市"):]
-	} else if strings.Contains(addr, "台北市") {
-		cityCode = "TP"
-		rest = addr[strings.Index(addr, "台北市")+len("台北市"):]
-	} else if strings.Contains(addr, "新北市") {
-		cityCode = "NTP"
-		rest = addr[strings.Index(addr, "新北市")+len("新北市"):]
-	} else {
-		return "", ""
-	}
-	// District name ends with 區; find its byte position
-	distEnd := strings.Index(rest, "區")
-	if distEnd < 0 {
-		return cityCode, ""
-	}
-	district = rest[:distEnd+len("區")]
-	return cityCode, district
 }
 
 func cityDisplayName(code string) string {

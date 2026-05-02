@@ -20,16 +20,26 @@ func InitKnowledgeRefreshCron() {
 		cron.WithSeconds(),
 	)
 
-	// All disaster data: every 15 minutes
-	if _, err := c.AddFunc("0 */15 * * * *", func() { refreshAllChunks("disaster") }); err != nil {
-		logs.Error("Failed to add knowledge refresh cron:", err)
+	// food_safety: every 15 minutes (即時醫療資料)
+	if _, err := c.AddFunc("0 */15 * * * *", func() { refreshAllChunks("food_safety") }); err != nil {
+		logs.Error("Failed to add food_safety cron:", err)
+	}
+	// transportation: every 5 minutes (YouBike 即時)
+	if _, err := c.AddFunc("0 */5 * * * *", func() { refreshAllChunks("transportation") }); err != nil {
+		logs.Error("Failed to add transportation cron:", err)
+	}
+	// population: every hour (統計資料，更新頻率低)
+	if _, err := c.AddFunc("0 0 * * * *", func() { refreshAllChunks("population") }); err != nil {
+		logs.Error("Failed to add population cron:", err)
 	}
 
 	c.Start()
 	logs.Info("Knowledge refresh cron started.")
 
 	// Run once immediately on startup
-	go refreshAllChunks("disaster")
+	go refreshAllChunks("food_safety")
+	go refreshAllChunks("transportation")
+	go refreshAllChunks("population")
 }
 
 // refreshAllChunks generates all chunks for the given topic and upserts them into Qdrant.
